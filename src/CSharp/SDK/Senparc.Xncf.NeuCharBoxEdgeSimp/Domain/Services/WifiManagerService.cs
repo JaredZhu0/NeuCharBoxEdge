@@ -79,76 +79,105 @@ namespace Senparc.Xncf.NeuCharBoxEdgeSimp.Domain.Services
                 }
 
                 // 4. 检查目标SSID是否在扫描结果中
-                if (!WifiBackgroundService.IsNetworkAvailable(ssid))
+                // if (!WifiBackgroundService.IsNetworkAvailable(ssid))
+                // {
+                //     _logger.LogWarning($"WiFi网络 '{ssid}' 未在扫描结果中找到");
+
+                //     // 显示可用网络列表供调试
+                //     var availableNetworks = WifiBackgroundService.GetAllAvailableNetworks();
+                //     if (availableNetworks.Any())
+                //     {
+                //         _logger.LogInformation($"当前可用的WiFi网络 ({availableNetworks.Count}个):");
+                //         foreach (var network in availableNetworks.Take(10))
+                //         {
+                //             _logger.LogInformation($"  SSID: {network.SSID}, 信号: {network.Signal}dBm, 安全: {network.Security}");
+                //         }
+                //     }
+
+                //     throw new NcfExceptionBase($"未找到WiFi网络 '{ssid}'，请检查SSID是否正确或网络是否在范围内");
+                // }
+
+                // // 5. 获取网络信息
+                // var networkInfo = WifiBackgroundService.GetNetworkInfo(ssid);
+                // _logger.LogInformation($"找到目标WiFi网络: {networkInfo.SSID}, 信号强度: {networkInfo.Signal}dBm, 安全类型: {networkInfo.Security}");
+
+                // 6. 处理已存在的连接配置
+                bool skipCreation = false;
+                if (string.IsNullOrWhiteSpace(password))
                 {
-                    _logger.LogWarning($"WiFi网络 '{ssid}' 未在扫描结果中找到");
-                    
-                    // 显示可用网络列表供调试
-                    var availableNetworks = WifiBackgroundService.GetAllAvailableNetworks();
-                    if (availableNetworks.Any())
+                    _logger.LogInformation($"[WiFi管理] 未提供密码，检查是否存在已保存的配置: {ssid}");
+                    var checkResult = await ExecuteCommandAsync($"nmcli connection show '{ssid}'");
+                    if (checkResult.Success)
                     {
-                        _logger.LogInformation($"当前可用的WiFi网络 ({availableNetworks.Count}个):");
-                        foreach (var network in availableNetworks.Take(10))
+                        _logger.LogInformation($"[WiFi管理] 检测到已存在 WiFi 配置 '{ssid}'，尝试直接激活...");
+                        var upResult = await ExecuteCommandAsync($"sudo nmcli connection up '{ssid}'");
+                        if (upResult.Success)
                         {
-                            _logger.LogInformation($"  SSID: {network.SSID}, 信号: {network.Signal}dBm, 安全: {network.Security}");
+                            _logger.LogInformation($"[WiFi管理] 成功激活现有 WiFi 配置: {ssid}");
+                            skipCreation = true;
                         }
-                    }
-                    
-                    throw new NcfExceptionBase($"未找到WiFi网络 '{ssid}'，请检查SSID是否正确或网络是否在范围内");
-                }
-                
-                // 5. 获取网络信息
-                var networkInfo = WifiBackgroundService.GetNetworkInfo(ssid);
-                _logger.LogInformation($"找到目标WiFi网络: {networkInfo.SSID}, 信号强度: {networkInfo.Signal}dBm, 安全类型: {networkInfo.Security}");
-
-                // 6. 删除可能存在的同名连接配置
-                await ExecuteCommandAsync($"sudo nmcli connection delete '{ssid}' 2>/dev/null || true");
-
-                // 7. 创建新的WiFi连接（使用connection add方式，支持自动重连）
-                string addConnectionCommand;
-                if (!string.IsNullOrWhiteSpace(password))
-                {
-                    // 有密码的WiFi网络
-                    addConnectionCommand = $"sudo nmcli connection add type wifi con-name '{ssid}' ifname {WifiBackgroundService.WifiInterfaceName} ssid '{ssid}' wifi-sec.key-mgmt wpa-psk wifi-sec.psk '{password}' connection.autoconnect yes";
-                }
-                else
-                {
-                    // 开放WiFi网络
-                    addConnectionCommand = $"sudo nmcli connection add type wifi con-name '{ssid}' ifname {WifiBackgroundService.WifiInterfaceName} ssid '{ssid}' connection.autoconnect yes";
-                }
-
-                _logger.LogInformation("创建WiFi连接配置...");
-                var addResult = await ExecuteCommandAsync(addConnectionCommand);
-                if (!addResult.Success)
-                {
-                    _logger.LogWarning($"创建连接配置失败，尝试直接连接: {addResult.Error}");
-                    
-                    // 备用方案：直接连接
-                    string directConnectCommand;
-                    if (!string.IsNullOrWhiteSpace(password))
-                    {
-                        directConnectCommand = $"sudo nmcli device wifi connect '{ssid}' password '{password}'";
+                        else
+                        {
+                            _logger.LogWarning($"[WiFi管理] 激活现有配置失败: {upResult.Error}，将尝试重新创建（作为开放网络）");
+                        }
                     }
                     else
                     {
-                        directConnectCommand = $"sudo nmcli device wifi connect '{ssid}'";
-                    }
-                    
-                    var connectResult = await ExecuteCommandAsync(directConnectCommand);
-                    if (!connectResult.Success)
-                    {
-                        throw new NcfExceptionBase($"WiFi连接失败: {connectResult.Error}");
+                        _logger.LogInformation($"[WiFi管理] 未找到已保存的配置: {ssid}");
                     }
                 }
-                else
+
+                if (!skipCreation)
                 {
-                    _logger.LogInformation("WiFi连接配置创建成功，正在连接...");
-                    
-                    // 激活连接
-                    var upResult = await ExecuteCommandAsync($"sudo nmcli connection up '{ssid}'");
-                    if (!upResult.Success)
+                    // 7. 删除可能存在的同名连接配置（如果是新密码或需要重建）
+                    await ExecuteCommandAsync($"sudo nmcli connection delete '{ssid}' 2>/dev/null || true");
+
+                    // 8. 创建新的WiFi连接（使用connection add方式，支持自动重连）
+                    string addConnectionCommand;
+                    if (!string.IsNullOrWhiteSpace(password))
                     {
-                        throw new NcfExceptionBase($"WiFi连接激活失败: {upResult.Error}");
+                        // 有密码的WiFi网络
+                        addConnectionCommand = $"sudo nmcli connection add type wifi con-name '{ssid}' ifname {WifiBackgroundService.WifiInterfaceName} ssid '{ssid}' wifi-sec.key-mgmt wpa-psk wifi-sec.psk '{password}' connection.autoconnect yes";
+                    }
+                    else
+                    {
+                        // 开放WiFi网络
+                        addConnectionCommand = $"sudo nmcli connection add type wifi con-name '{ssid}' ifname {WifiBackgroundService.WifiInterfaceName} ssid '{ssid}' connection.autoconnect yes";
+                    }
+
+                    _logger.LogInformation("创建WiFi连接配置...");
+                    var addResult = await ExecuteCommandAsync(addConnectionCommand);
+                    if (!addResult.Success)
+                    {
+                        _logger.LogWarning($"创建连接配置失败，尝试直接连接: {addResult.Error}");
+
+                        // 备用方案：直接连接
+                        string directConnectCommand;
+                        if (!string.IsNullOrWhiteSpace(password))
+                        {
+                            directConnectCommand = $"sudo nmcli device wifi connect '{ssid}' password '{password}'";
+                        }
+                        else
+                        {
+                            directConnectCommand = $"sudo nmcli device wifi connect '{ssid}'";
+                        }
+
+                        var connectResult = await ExecuteCommandAsync(directConnectCommand);
+                        if (!connectResult.Success)
+                        {
+                            throw new NcfExceptionBase($"WiFi连接失败: {connectResult.Error}");
+                        }
+                    }
+                    else
+                    {
+                        _logger.LogInformation("WiFi连接配置创建成功，正在连接...");
+
+                        // 激活连接
+                        var upResult = await ExecuteCommandAsync($"sudo nmcli connection up '{ssid}'");
+                        if (!upResult.Success)
+                        {
+                            throw new NcfExceptionBase($"WiFi连接激活失败: {upResult.Error}");
+                        }
                     }
                 }
 
@@ -310,7 +339,7 @@ namespace Senparc.Xncf.NeuCharBoxEdgeSimp.Domain.Services
         /// <summary>
         /// 保存NCBIP到配置文件
         /// </summary>
-        private async Task SaveNCBIPToConfigAsync(string ncbIp)
+        public async Task SaveNCBIPToConfigAsync(string ncbIp)
         {
             var appsettingsPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "appsettings.json");
             if (!File.Exists(appsettingsPath))

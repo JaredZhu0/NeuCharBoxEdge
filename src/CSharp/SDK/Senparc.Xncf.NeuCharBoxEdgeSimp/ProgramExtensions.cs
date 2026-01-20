@@ -64,6 +64,9 @@ namespace Senparc.Xncf.NeuCharBoxEdgeSimp
             // 添加WiFi后台服务
             builder.Services.AddHostedService<WifiBackgroundService>();
 
+            //添加自动同步NCB网络后台服务
+            builder.Services.AddHostedService<GetNCBNetInfoBackgroundService>();
+
             // 添加热点配网后台服务
             builder.Services.AddHostedService<HotspotProvisioningService>();
 

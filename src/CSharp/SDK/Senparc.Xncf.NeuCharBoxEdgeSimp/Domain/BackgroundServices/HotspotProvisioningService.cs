@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.SignalR.Client;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Senparc.Xncf.NeuCharBoxEdgeSimp.Domain.Models;
 using Senparc.Xncf.NeuCharBoxEdgeSimp.Domain.Services;
 using System;
 using System.Threading;
@@ -16,21 +17,29 @@ namespace Senparc.Xncf.NeuCharBoxEdgeSimp.Domain.BackgroundServices
     {
         private readonly ILogger<HotspotProvisioningService> _logger;
         private readonly WifiManagerService _wifiManagerService;
-        
+        private readonly SenderReceiverSet _senderReceiverSet;
+
         // 检查间隔（首次2分钟，后续每5分钟）
         private const int INITIAL_DELAY_SECONDS = 120; // 2分钟
         private const int CHECK_INTERVAL_SECONDS = 300; // 5分钟
         
         public HotspotProvisioningService(
             ILogger<HotspotProvisioningService> logger,
-            WifiManagerService wifiManagerService)
+            WifiManagerService wifiManagerService,
+            SenderReceiverSet senderReceiverSet)
         {
             _logger = logger;
             _wifiManagerService = wifiManagerService;
+            _senderReceiverSet = senderReceiverSet;
         }
 
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
         {
+            if (!(_senderReceiverSet.IsOpenAP ?? false))
+            {
+                return;
+            }
+
             _logger.LogInformation("[热点配网] 热点配网服务启动中...");
             _logger.LogInformation($"[热点配网] 将在 {INITIAL_DELAY_SECONDS} 秒后首次检查 NCB 连接状态");
 
