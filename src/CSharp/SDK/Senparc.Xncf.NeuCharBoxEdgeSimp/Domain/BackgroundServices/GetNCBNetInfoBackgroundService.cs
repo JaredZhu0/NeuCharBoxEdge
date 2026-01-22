@@ -23,6 +23,8 @@ public class GetNCBNetInfoBackgroundService : Microsoft.Extensions.Hosting.Backg
     private readonly IServiceProvider _serviceProvider;
     private readonly SenderReceiverSet _senderReceiverSet;
 
+    public static long CheckNoConnectNum = 0;
+
     public GetNCBNetInfoBackgroundService(SenderReceiverSet senderReceiverSet, IServiceProvider serviceProvider)
     {
         _serviceProvider = serviceProvider;
@@ -41,27 +43,33 @@ public class GetNCBNetInfoBackgroundService : Microsoft.Extensions.Hosting.Backg
                 await Task.Delay(TimeSpan.FromSeconds(20), stoppingToken);
 
                 await DoWork();
+
             }
             catch (Exception ex)
             {
                 Console.WriteLine($"获取NCB网络信息出错: {ex.Message}");
+            }
+            finally
+            {
+                CheckNoConnectNum++;
             }
         }
     }
 
     private async Task DoWork()
     {
-        string ip = IpHelper.GetGatewayAddress(_senderReceiverSet);
-        if (string.IsNullOrWhiteSpace(ip))
-        {
-            Console.WriteLine("未获取到当前网关地址");
-            return;
-        }
+        // string ip = IpHelper.GetGatewayAddress(_senderReceiverSet);
+        // if (string.IsNullOrWhiteSpace(ip))
+        // {
+        //     Console.WriteLine("未获取到当前网关地址");
+        //     return;
+        // }
         // 获取 NCBConnection 状态（从 Register.Thread）
         var ncbConnection = Register.NCBConnection;
         bool isConnected = ncbConnection != null && ncbConnection.State == HubConnectionState.Connected;
         if (isConnected)
         {
+            CheckNoConnectNum = 0;
             return;
         }
 
@@ -69,13 +77,17 @@ public class GetNCBNetInfoBackgroundService : Microsoft.Extensions.Hosting.Backg
         // 检查更新
         var request = new NcxBox_DeviceVD
         {
-            DID = _senderReceiverSet.dId,
-            UID = _senderReceiverSet.uId,
-            Time = DateTime.Now,
+            DID = _senderReceiverSet.dId.Trim(),
+            UID = _senderReceiverSet.uId.Trim(),
+            Time = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
         };
-        request.sign = CertHepler.RsaEncryptWithPrivateKey(request.DID + request.UID + request.Time.ToString("yyyyMMddHHmmss"));
+        string signStr = request.DID + request.UID + request.Time;
+        Console.WriteLine("加密字符串：" + signStr);
+        request.sign = CertHepler.RsaEncryptWithPrivateKey(signStr);
 
         var json = JsonConvert.SerializeObject(request);
+        Console.WriteLine("获取NCB网络信息请求URL：" + url);
+        Console.WriteLine("获取NCB网络信息请求报文：" + json);
         var content = new StringContent(json, Encoding.UTF8, "application/json");
         try
         {
@@ -105,7 +117,7 @@ public class GetNCBNetInfoBackgroundService : Microsoft.Extensions.Hosting.Backg
                             {
                                 Console.WriteLine($"检测到 WiFi 变更: {currentSsid} -> {wifiMsg.wifiName}，准备切换...");
                                 // 尝试连接新 WiFi。注意：此处由于接口未返回密码，传入 null，nmcli 将尝试使用已保存的凭据
-                                await wifiManagerService.ConnectToWifiAsync(wifiMsg.wifiName, null, wifiMsg.ipAddress);
+                                await wifiManagerService.ConnectToWifiAsync(wifiMsg.wifiName, null, wifiMsg.ipAddress, true);
                             }
                             else
                             {
@@ -183,7 +195,7 @@ public class NcxBox_DeviceVD
     /// <summary>
     /// 时间
     /// </summary>
-    public DateTime Time { get; set; }
+    public long Time { get; set; }
     /// <summary>
     /// 签名
     /// </summary>

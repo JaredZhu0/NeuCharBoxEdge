@@ -19,10 +19,10 @@ namespace Senparc.Xncf.NeuCharBoxEdgeSimp.Domain.BackgroundServices
         private readonly WifiManagerService _wifiManagerService;
         private readonly SenderReceiverSet _senderReceiverSet;
 
-        // 检查间隔（首次2分钟，后续每5分钟）
-        private const int INITIAL_DELAY_SECONDS = 120; // 2分钟
-        private const int CHECK_INTERVAL_SECONDS = 300; // 5分钟
-        
+        // 检查间隔（首次1.5分钟，后续每1.5分钟）
+        private const int INITIAL_DELAY_SECONDS = 90; // 1.5分钟
+        private const int CHECK_INTERVAL_SECONDS = 90; // 1.5分钟
+
         public HotspotProvisioningService(
             ILogger<HotspotProvisioningService> logger,
             WifiManagerService wifiManagerService,
@@ -35,6 +35,10 @@ namespace Senparc.Xncf.NeuCharBoxEdgeSimp.Domain.BackgroundServices
 
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
         {
+            // 程序启动时先执行一次清理，确保系统处于纯净的 WiFi 客户端模式
+            // 防止断电重启后 OS 层面残留的热点状态干扰正常 WiFi 连接
+            await _wifiManagerService.InitialCleanupAsync();
+
             if (!(_senderReceiverSet.IsOpenAP ?? false))
             {
                 return;
@@ -47,10 +51,10 @@ namespace Senparc.Xncf.NeuCharBoxEdgeSimp.Domain.BackgroundServices
             {
                 // 首次等待2分钟
                 await Task.Delay(TimeSpan.FromSeconds(INITIAL_DELAY_SECONDS), stoppingToken);
-                
+
                 // 首次检查
                 await CheckAndStartHotspotIfNeededAsync();
-                
+
                 // 后续定期检查（每5分钟）
                 while (!stoppingToken.IsCancellationRequested)
                 {
@@ -75,28 +79,33 @@ namespace Senparc.Xncf.NeuCharBoxEdgeSimp.Domain.BackgroundServices
         {
             try
             {
+                if (GetNCBNetInfoBackgroundService.CheckNoConnectNum <= 12)
+                {
+                    return;
+                }
+
                 _logger.LogInformation("[热点配网] 开始检查 NCB 连接状态...");
-                
+
                 // 获取 NCBConnection 状态（从 Register.Thread）
                 var ncbConnection = Register.NCBConnection;
                 bool isConnected = ncbConnection != null && ncbConnection.State == HubConnectionState.Connected;
-                
+
                 _logger.LogInformation($"[热点配网] NCB 连接状态: {(isConnected ? "已连接" : "未连接")}");
-                
+
                 if (!isConnected)
                 {
-                    _logger.LogWarning("[热点配网] NCB 未连接，准备启动热点模式进行配网");
-                    
+                    _logger.LogWarning("[热点配网] 连续 2 次未连接，准备启动热点模式进行配网");
+
                     // 检查热点是否已经激活
                     if (WifiManagerService.IsHotspotActive)
                     {
                         _logger.LogInformation($"[热点配网] 热点已激活: {WifiManagerService.HotspotSSID}，无需重复启动");
                         return;
                     }
-                    
+
                     // 启动热点
                     var (success, message) = await _wifiManagerService.StartHotspotAsync();
-                    
+
                     if (success)
                     {
                         _logger.LogInformation($"[热点配网] 热点启动成功: {message}");
@@ -111,14 +120,14 @@ namespace Senparc.Xncf.NeuCharBoxEdgeSimp.Domain.BackgroundServices
                 else
                 {
                     _logger.LogInformation("[热点配网] NCB 已连接，检查是否需要关闭热点");
-                    
+
                     // 如果已连接且热点激活，则关闭热点
                     if (WifiManagerService.IsHotspotActive)
                     {
                         _logger.LogInformation("[热点配网] NCB 已连接，正在关闭热点...");
-                        
+
                         var (success, message) = await _wifiManagerService.StopHotspotAsync();
-                        
+
                         if (success)
                         {
                             _logger.LogInformation($"[热点配网] 热点已关闭: {message}");
@@ -139,14 +148,14 @@ namespace Senparc.Xncf.NeuCharBoxEdgeSimp.Domain.BackgroundServices
         public override async Task StopAsync(CancellationToken cancellationToken)
         {
             _logger.LogInformation("[热点配网] 热点配网服务正在停止...");
-            
+
             // 停止热点（如果激活）
             if (WifiManagerService.IsHotspotActive)
             {
                 _logger.LogInformation("[热点配网] 正在关闭热点...");
                 await _wifiManagerService.StopHotspotAsync();
             }
-            
+
             await base.StopAsync(cancellationToken);
         }
     }
