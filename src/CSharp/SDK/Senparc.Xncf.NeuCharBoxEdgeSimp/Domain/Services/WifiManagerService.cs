@@ -159,6 +159,10 @@ namespace Senparc.Xncf.NeuCharBoxEdgeSimp.Domain.Services
                         }
                         else
                         {
+                            if (onlyChange)
+                            {
+                                throw new NcfExceptionBase($"激活现有 WiFi 配置'{ssid}'失败: {upResult?.Error}");
+                            }
                             _logger.LogWarning($"[WiFi管理] 激活现有配置失败: {upResult.Error}，将尝试重新创建（作为开放网络）");
                         }
                     }
@@ -167,7 +171,7 @@ namespace Senparc.Xncf.NeuCharBoxEdgeSimp.Domain.Services
                         _logger.LogInformation($"[WiFi管理] 未找到已保存的配置: {ssid}");
                         if (onlyChange)
                         {
-                            throw new Exception($"未查询到已经配置的网络'{ssid}'");
+                            throw new NcfExceptionBase($"未查询到已经配置的网络'{ssid}'");
                         }
                     }
                 }
